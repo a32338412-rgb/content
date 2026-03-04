@@ -5,8 +5,12 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const archiver = require('archiver');
+const axios = require('axios');
+const FormData = require('form-data');
 const { createContent } = require('../services/llmService');
-const { renderCover, renderDetail, OUTPUT_DIR } = require('../services/renderService');
+const { renderCover, renderDetail, screenshotUrl, OUTPUT_DIR } = require('../services/renderService');
+const { saveContentToFeishuBitable } = require('../services/feishuService');
+const { notifyFeishuBot } = require('../services/wechatService');
 const db = require('../db/database');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/images');
@@ -39,7 +43,7 @@ router.post('/upload', upload.array('images', 10), (req, res) => {
   res.json({ success: true, data: files });
 });
 
-// 内容创作
+// 内容创作（人工流程）
 router.post('/create', async (req, res) => {
   const { title, description, extra_info } = req.body;
   if (!title) return res.status(400).json({ success: false, error: '缺少资讯标题' });
@@ -52,7 +56,7 @@ router.post('/create', async (req, res) => {
   }
 });
 
-// 渲染图片
+// 渲染图片（人工流程）
 router.post('/render', async (req, res) => {
   const { cover_word, cover_title, cover_description, cover_emoji, cover_title_color, image_filenames } = req.body;
 
@@ -95,6 +99,110 @@ router.post('/render', async (req, res) => {
   }
 });
 
+/**
+ * Agent 一步完成内容创作 + 渲染
+ *
+ * 请求体：
+ * {
+ *   news_id?: number,          // 关联的资讯 ID（可选，用于记录来源）
+ *   source_url?: string,        // 原始资讯链接（如有，截图作为详情图）
+ *   cover_word: string,
+ *   cover_title: string,
+ *   cover_description: string,
+ *   cover_emoji: string,
+ *   cover_title_color?: string, // 留空则根据内容类型自动选色
+ *   content_type?: string,      // 'news'|'tools'|'topics'|'default' 用于自动选色
+ *   title: string,
+ *   content: string,
+ *   tags?: string,              // 逗号分隔的标签
+ * }
+ *
+ * 颜色自动选择规则：
+ *   default/不确定 → #06FFA5 翠绿
+ *   news           → #FF6B35 橙红
+ *   tools          → #5478EB 蓝紫
+ *   topics         → #FFD700 金黄
+ */
+router.post('/agent-render', async (req, res) => {
+  const {
+    news_id,
+    source_url,
+    cover_word,
+    cover_title,
+    cover_description,
+    cover_emoji,
+    cover_title_color,
+    content_type,
+    title,
+    content,
+    tags,
+  } = req.body;
+
+  if (!cover_word || !cover_title || !title) {
+    return res.status(400).json({ success: false, error: '缺少必要字段：cover_word, cover_title, title' });
+  }
+
+  // 自动选色
+  const colorMap = { news: '#FF6B35', tools: '#5478EB', topics: '#FFD700', default: '#06FFA5' };
+  const titleColor = cover_title_color || colorMap[content_type] || '#06FFA5';
+
+  const sessionId = uuidv4();
+
+  try {
+    // 渲染封面
+    const coverPath = await renderCover(
+      { cover_word, cover_title, cover_description, cover_emoji, cover_title_color: titleColor },
+      sessionId
+    );
+
+    // 详情图：如有 source_url 则截图，否则无详情图
+    const detailPaths = [];
+    if (source_url) {
+      try {
+        const screenshotPaths = await screenshotUrl(source_url, sessionId);
+        for (let i = 0; i < screenshotPaths.length; i++) {
+          const dp = await renderDetail(screenshotPaths[i], sessionId, i, titleColor);
+          detailPaths.push(dp);
+        }
+      } catch (e) {
+        console.warn('截图失败，跳过详情图:', e.message);
+      }
+    }
+
+    const coverUrl = `/uploads/rendered/${path.basename(coverPath)}`;
+    const detailUrls = detailPaths.map((p) => `/uploads/rendered/${path.basename(p)}`);
+
+    // 保存内容到数据库
+    const stmt = db.prepare(`
+      INSERT INTO saved_contents (news_id, title, content, cover_url, detail_urls, tags, source_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const info = stmt.run(
+      news_id || null,
+      title,
+      content,
+      coverUrl,
+      JSON.stringify(detailUrls),
+      tags || '',
+      source_url || ''
+    );
+
+    res.json({
+      success: true,
+      data: {
+        saved_content_id: info.lastInsertRowid,
+        session_id: sessionId,
+        cover_url: coverUrl,
+        detail_urls: detailUrls,
+        title_color: titleColor,
+      },
+    });
+  } catch (err) {
+    console.error('Agent 渲染失败:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 打包下载渲染图片
 router.post('/download', (req, res) => {
   const { cover_url, detail_urls } = req.body;
@@ -124,14 +232,22 @@ router.post('/download', (req, res) => {
   archive.finalize();
 });
 
-// 保存内容到资源库
+// 保存内容到资源库（人工流程）
 router.post('/save', (req, res) => {
-  const { title, content, cover_url, detail_urls } = req.body;
+  const { news_id, title, content, cover_url, detail_urls, tags, source_url } = req.body;
   const stmt = db.prepare(`
-    INSERT INTO saved_contents (title, content, cover_url, detail_urls)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO saved_contents (news_id, title, content, cover_url, detail_urls, tags, source_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  const info = stmt.run(title || '', content || '', cover_url || '', JSON.stringify(detail_urls || []));
+  const info = stmt.run(
+    news_id || null,
+    title || '',
+    content || '',
+    cover_url || '',
+    JSON.stringify(detail_urls || []),
+    tags || '',
+    source_url || ''
+  );
   res.json({ success: true, data: { id: info.lastInsertRowid } });
 });
 
@@ -149,6 +265,57 @@ router.get('/saved', (req, res) => {
 router.delete('/saved/:id', (req, res) => {
   db.prepare('DELETE FROM saved_contents WHERE id = ?').run(req.params.id);
   res.json({ success: true });
+});
+
+/**
+ * 保存内容到飞书多维表
+ * 请求体：{ saved_content_id: number }
+ * 或直接传 { title, content, source_url, tags, cover_url, detail_urls }
+ */
+router.post('/save-to-bitable', async (req, res) => {
+  let data = req.body;
+
+  // 如果传了 saved_content_id，从数据库取
+  if (data.saved_content_id) {
+    const row = db.prepare('SELECT * FROM saved_contents WHERE id = ?').get(data.saved_content_id);
+    if (!row) return res.status(404).json({ success: false, error: '内容不存在' });
+    data = {
+      ...row,
+      detail_urls: (() => { try { return JSON.parse(row.detail_urls); } catch { return []; } })(),
+    };
+    // 取关联资讯
+    if (row.news_id) {
+      const newsRow = db.prepare('SELECT * FROM news WHERE id = ?').get(row.news_id);
+      if (newsRow) {
+        data.news_title = newsRow.translated_title || newsRow.title;
+        data.news_source_url = newsRow.link || data.source_url;
+      }
+    }
+  }
+
+  try {
+    const result = await saveContentToFeishuBitable(data);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('保存到飞书多维表失败:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 飞书机器人 Webhook 通知
+ * 请求体：{ message: string }
+ */
+router.post('/notify-bot', async (req, res) => {
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ success: false, error: '缺少 message 字段' });
+
+  try {
+    const result = await notifyFeishuBot(message);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;

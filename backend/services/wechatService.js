@@ -77,4 +77,24 @@ async function pushAINews(newsTitle, newsSummary, tag = '#AINews') {
   return { results };
 }
 
-module.exports = { pushAINews };
+/**
+ * 发送消息到飞书机器人 Webhook
+ * 支持纯文本消息
+ */
+async function notifyFeishuBot(message) {
+  const webhook = getConfig('feishu_bot_webhook');
+  if (!webhook) throw new Error('未配置飞书机器人 Webhook 地址');
+
+  const resp = await axios.post(webhook, {
+    msg_type: 'text',
+    content: { text: message },
+  });
+
+  if (resp.data.code !== undefined && resp.data.code !== 0) {
+    throw new Error(`飞书 Webhook 发送失败: ${resp.data.msg}`);
+  }
+
+  return { success: true };
+}
+
+module.exports = { pushAINews, notifyFeishuBot };

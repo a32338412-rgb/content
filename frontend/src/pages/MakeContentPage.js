@@ -235,6 +235,7 @@ export default function MakeContentPage() {
   const [renderResult, setRenderResult] = useState(null);
   const [editContent, setEditContent] = useState(null);
   const [titleColor, setTitleColor] = useState('#06FFA5');
+  const [savingBitable, setSavingBitable] = useState(false);
 
   const handleCreate = async () => {
     if (!initialData.title) {
@@ -316,12 +317,34 @@ export default function MakeContentPage() {
         content: editContent?.content || '',
         cover_url: renderResult?.cover_url || '',
         detail_urls: renderResult?.detail_urls || [],
+        source_url: initialData.link || '',
       });
       toast.success('已保存到资源库！');
     } catch (e) {
       toast.error('保存失败');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveToBitable = async () => {
+    if (!renderResult && !editContent) return;
+    setSavingBitable(true);
+    try {
+      await contentAPI.saveToBitable({
+        title: editContent?.title || '',
+        content: editContent?.content || '',
+        cover_url: renderResult?.cover_url || '',
+        detail_urls: renderResult?.detail_urls || [],
+        source_url: initialData.link || '',
+        news_title: initialData.title || '',
+        news_source_url: initialData.link || '',
+      });
+      toast.success('已保存到飞书多维表！');
+    } catch (e) {
+      toast.error(e.response?.data?.error || '保存到多维表失败');
+    } finally {
+      setSavingBitable(false);
     }
   };
 
@@ -493,6 +516,15 @@ export default function MakeContentPage() {
                   >
                     {saving ? <span className="spinner" style={{ width: 14, height: 14 }} /> : '★'}
                     {saving ? ' 保存中…' : ' 保存到资源库'}
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    onClick={handleSaveToBitable}
+                    disabled={savingBitable}
+                    title="保存到飞书多维表供审核"
+                  >
+                    {savingBitable ? <span className="spinner" style={{ width: 14, height: 14 }} /> : '⊞'}
+                    {savingBitable ? ' 同步中…' : ' 存入多维表'}
                   </button>
                 </div>
               )}

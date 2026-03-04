@@ -43,6 +43,12 @@ const DEFAULT_CONFIG = {
 
   // 正向筛选范围：title（仅标题）或 all（标题+描述）
   allowlist_scope: 'title',
+
+  // 飞书多维表 URL（含 app_token 和 table_id）
+  feishu_bitable_url: '',
+
+  // 飞书机器人 Webhook 地址
+  feishu_bot_webhook: '',
 };
 
 function getConfig(key) {

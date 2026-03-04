@@ -36,13 +36,16 @@ router.get('/', (req, res) => {
   res.json({ success: true, data: news });
 });
 
-// 获取按信源分组的资讯（首页用，已过滤）
+// 获取按信源分组的资讯
+// ?agent=1 时额外过滤掉已推送（ai_newsed=1）的条目，避免 Agent 重复处理
 router.get('/grouped', (req, res) => {
+  const isAgent = req.query.agent === '1';
   const sources = db.prepare('SELECT * FROM sources WHERE enabled = 1 ORDER BY id').all();
   const result = sources.map((source) => {
+    const extraFilter = isAgent ? 'AND ai_newsed = 0' : '';
     const items = db.prepare(`
       SELECT * FROM news 
-      WHERE source_id = ? AND hidden = 0 
+      WHERE source_id = ? AND hidden = 0 ${extraFilter}
       ORDER BY pub_date DESC, fetched_at DESC 
       LIMIT 30
     `).all(source.id);
@@ -76,6 +79,57 @@ router.get('/saved', (req, res) => {
     LIMIT 200
   `).all();
   res.json({ success: true, data: items });
+});
+
+/**
+ * Agent 信息汇总接口：返回用于 Agent 学习选择规律的数据
+ * - 最近 5 条已保存资讯（含 push_type）
+ * - 最近 5 条已保存内容
+ * - 对应时段的全量资讯标题列表（用于对比 Agent 学到哪些被选中）
+ */
+router.get('/agent-summary', (req, res) => {
+  const savedNews = db.prepare(`
+    SELECT n.id, n.title, n.translated_title, n.description, n.translated_description,
+           n.link, n.pub_date, n.push_type, n.saved_at, s.name as source_name
+    FROM news n JOIN sources s ON n.source_id = s.id
+    WHERE n.saved = 1
+    ORDER BY n.saved_at DESC
+    LIMIT 5
+  `).all();
+
+  const savedContents = db.prepare(`
+    SELECT sc.*, n.title as news_title, n.link as news_link
+    FROM saved_contents sc
+    LEFT JOIN news n ON sc.news_id = n.id
+    ORDER BY sc.created_at DESC
+    LIMIT 5
+  `).all().map((item) => ({
+    ...item,
+    detail_urls: (() => { try { return JSON.parse(item.detail_urls); } catch { return []; } })(),
+  }));
+
+  // 取最近时段（最早保存记录往前推 24h）对应的全量资讯标题
+  const earliestSavedAt = savedNews.length > 0
+    ? savedNews[savedNews.length - 1].saved_at
+    : new Date(Date.now() - 86400000).toISOString();
+
+  const allNewsInPeriod = db.prepare(`
+    SELECT n.id, n.title, n.translated_title, n.hidden, n.saved, n.ai_newsed, n.push_type,
+           n.pub_date, s.name as source_name
+    FROM news n JOIN sources s ON n.source_id = s.id
+    WHERE n.fetched_at >= datetime(?, '-1 day')
+    ORDER BY n.pub_date DESC
+    LIMIT 100
+  `).all(earliestSavedAt);
+
+  res.json({
+    success: true,
+    data: {
+      saved_news: savedNews,
+      saved_contents: savedContents,
+      all_news_in_period: allNewsInPeriod,
+    },
+  });
 });
 
 // 拉取资讯（全部或指定信源）
@@ -118,33 +172,42 @@ router.post('/:id/unsave', (req, res) => {
   res.json({ success: true });
 });
 
-// 通用推送逻辑
-async function doPush(id, type) {
+/**
+ * 通用推送核心逻辑
+ * 支持两种模式：
+ *   1. 人工模式（human）：调用 LLM 生成内容（原有行为）
+ *   2. Agent 模式：body 中直接传入 news_title + news_summary，跳过 LLM
+ */
+async function doPush(id, type, overrideContent) {
   const item = db.prepare('SELECT * FROM news WHERE id = ?').get(id);
   if (!item) throw Object.assign(new Error('资讯不存在'), { status: 404 });
 
-  let formatted;
-  let tag;
-  let feishuEmoji;
+  let newsTitle, newsSummary;
 
-  if (type === 'ainews') {
-    formatted = await formatNewsForAINews(item.translated_title || item.title, item.translated_description || item.description);
-    tag = '#AINews';
-    feishuEmoji = '🆕';
-  } else if (type === 'aitopics') {
-    formatted = await formatNewsForAITopics(item.translated_title || item.title, item.translated_description || item.description);
-    tag = '#AITopic';
-    feishuEmoji = '💬';
-  } else if (type === 'aitools') {
-    formatted = await formatNewsForAITools(item.translated_title || item.title, item.translated_description || item.description);
-    tag = '#AITools';
-    feishuEmoji = '🛠';
+  if (overrideContent && overrideContent.news_title && overrideContent.news_summary) {
+    // Agent 直接传入内容，跳过 LLM
+    newsTitle = overrideContent.news_title;
+    newsSummary = overrideContent.news_summary;
   } else {
-    throw new Error('未知推送类型');
+    // 调用 LLM 生成（人工推送按钮走此路径）
+    let formatted;
+    if (type === 'ainews') {
+      formatted = await formatNewsForAINews(item.translated_title || item.title, item.translated_description || item.description);
+    } else if (type === 'aitopics') {
+      formatted = await formatNewsForAITopics(item.translated_title || item.title, item.translated_description || item.description);
+    } else if (type === 'aitools') {
+      formatted = await formatNewsForAITools(item.translated_title || item.title, item.translated_description || item.description);
+    } else {
+      throw new Error('未知推送类型');
+    }
+    newsTitle = formatted.news_title;
+    newsSummary = formatted.news_summary;
   }
 
-  const newsTitle = formatted.news_title;
-  const newsSummary = formatted.news_summary;
+  const tagMap = { ainews: '#AINews', aitopics: '#AITopic', aitools: '#AITools' };
+  const emojiMap = { ainews: '🆕', aitopics: '💬', aitools: '🛠' };
+  const tag = tagMap[type] || '#AINews';
+  const feishuEmoji = emojiMap[type] || '🆕';
   const sourceUrl = item.link;
 
   const [wechatResult, feishuResult] = await Promise.allSettled([
@@ -152,19 +215,25 @@ async function doPush(id, type) {
     saveNewsToFeishu(newsTitle, newsSummary, sourceUrl, feishuEmoji),
   ]);
 
-  db.prepare('UPDATE news SET ai_newsed = 1 WHERE id = ?').run(id);
+  // 推送后自动保存，标记推送类型
+  db.prepare(`
+    UPDATE news SET ai_newsed = 1, saved = 1, saved_at = datetime('now'), push_type = ?
+    WHERE id = ?
+  `).run(type, id);
 
   return {
-    formatted: { newsTitle, newsSummary },
+    news_id: id,
+    news_title: newsTitle,
+    news_summary: newsSummary,
     wechat: wechatResult.status === 'fulfilled' ? wechatResult.value : { error: wechatResult.reason?.message },
     feishu: feishuResult.status === 'fulfilled' ? feishuResult.value : { error: feishuResult.reason?.message },
   };
 }
 
-// 加入 AINews
+// 加入 AINews（人工 + Agent 共用）
 router.post('/:id/ainews', async (req, res) => {
   try {
-    const data = await doPush(req.params.id, 'ainews');
+    const data = await doPush(req.params.id, 'ainews', req.body);
     res.json({ success: true, data });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.message });
@@ -174,7 +243,7 @@ router.post('/:id/ainews', async (req, res) => {
 // 加入 AITopics
 router.post('/:id/aitopics', async (req, res) => {
   try {
-    const data = await doPush(req.params.id, 'aitopics');
+    const data = await doPush(req.params.id, 'aitopics', req.body);
     res.json({ success: true, data });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.message });
@@ -184,7 +253,7 @@ router.post('/:id/aitopics', async (req, res) => {
 // 加入 AITools
 router.post('/:id/aitools', async (req, res) => {
   try {
-    const data = await doPush(req.params.id, 'aitools');
+    const data = await doPush(req.params.id, 'aitools', req.body);
     res.json({ success: true, data });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.message });

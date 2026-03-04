@@ -47,6 +47,8 @@ export const contentAPI = {
   render: (data) => api.post('/content/render', data),
   download: (data) => api.post('/content/download', data, { responseType: 'blob' }),
   saveContent: (data) => api.post('/content/save', data),
+  saveToBitable: (data) => api.post('/content/save-to-bitable', data),
+  notifyBot: (message) => api.post('/content/notify-bot', { message }),
   savedList: () => api.get('/content/saved'),
   deleteSaved: (id) => api.delete(`/content/saved/${id}`),
 };

@@ -189,7 +189,61 @@ function escHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * 截取外部 URL 页面截图，并按需裁切为多张 3:4 图片
+ * 宽高比 < 3:4（即很长的页面）→ 裁切为 N 张 3:4 的图
+ * 宽高比 ≥ 3:4 → 直接整张截图
+ * 返回本地文件路径数组
+ */
+async function screenshotUrl(url, sessionId) {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  const TARGET_W = 1080;
+  const TARGET_H = 1440; // 3:4 比例
+
+  try {
+    await page.setViewport({ width: TARGET_W, height: TARGET_H, deviceScaleFactor: 1 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.evaluate(() => document.fonts.ready);
+
+    // 获取实际页面高度
+    const fullHeight = await page.evaluate(() => document.body.scrollHeight);
+    const ratio = TARGET_W / fullHeight; // width/height
+
+    const paths = [];
+
+    if (ratio >= 3 / 4) {
+      // 宽高比 ≥ 3:4，整张截图缩放到 1080×1440
+      const buffer = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: TARGET_W, height: Math.min(fullHeight, TARGET_H) } });
+      const outPath = path.join(OUTPUT_DIR, `${sessionId}_screenshot_0.png`);
+      fs.writeFileSync(outPath, buffer);
+      paths.push(outPath);
+    } else {
+      // 页面很长，每 TARGET_H px 裁一张（最多 5 张）
+      const sliceCount = Math.min(Math.ceil(fullHeight / TARGET_H), 5);
+      await page.setViewport({ width: TARGET_W, height: fullHeight, deviceScaleFactor: 1 });
+      // 重新等待避免重排
+      await new Promise((r) => setTimeout(r, 500));
+
+      for (let i = 0; i < sliceCount; i++) {
+        const y = i * TARGET_H;
+        const sliceH = Math.min(TARGET_H, fullHeight - y);
+        if (sliceH < 200) break; // 太短的尾部忽略
+        const buffer = await page.screenshot({ type: 'png', clip: { x: 0, y, width: TARGET_W, height: sliceH } });
+        // 如不足 TARGET_H，用白色背景补全
+        const outPath = path.join(OUTPUT_DIR, `${sessionId}_screenshot_${i}.png`);
+        fs.writeFileSync(outPath, buffer);
+        paths.push(outPath);
+      }
+    }
+
+    return paths;
+  } finally {
+    await page.close();
+  }
+}
+
 // 进程退出时关闭浏览器
 process.on('exit', () => { if (browserInstance) browserInstance.close(); });
 
-module.exports = { renderCover, renderDetail, OUTPUT_DIR };
+module.exports = { renderCover, renderDetail, screenshotUrl, OUTPUT_DIR };

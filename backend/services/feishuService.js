@@ -1,4 +1,7 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const FormData = require('form-data');
 const db = require('../db/database');
 const { getConfig } = require('./configService');
 
@@ -141,4 +144,112 @@ async function saveNewsToFeishu(newsTitle, newsSummary, sourceUrl, titleEmoji = 
   return { docToken: doc.node_token, date: today };
 }
 
-module.exports = { saveNewsToFeishu, getOrCreateDailyDoc };
+/**
+ * 从飞书多维表 URL 中提取 app_token 和 table_id
+ * URL 格式：https://xxx.feishu.cn/base/{app_token}?table={table_id}&...
+ */
+function parseBitableUrl(url) {
+  if (!url) return null;
+  const match = url.match(/\/base\/([^/?]+)/);
+  const tableMatch = url.match(/[?&]table=([^&]+)/);
+  if (!match || !tableMatch) return null;
+  return { appToken: match[1], tableId: tableMatch[1] };
+}
+
+/**
+ * 上传图片到飞书多维表素材（获取 file_token）
+ * localPath: 服务器本地绝对路径
+ */
+async function uploadImageToBitable(localPath, appToken, token) {
+  if (!fs.existsSync(localPath)) return null;
+
+  const stat = fs.statSync(localPath);
+  const form = new FormData();
+  form.append('file_name', path.basename(localPath));
+  form.append('parent_type', 'bitable_image');
+  form.append('parent_node', appToken);
+  form.append('size', String(stat.size));
+  form.append('file', fs.createReadStream(localPath), { filename: path.basename(localPath) });
+
+  const resp = await axios.post(
+    `${FEISHU_API}/drive/v1/medias/upload_all`,
+    form,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...form.getHeaders(),
+      },
+      timeout: 60000,
+    }
+  );
+
+  if (resp.data.code !== 0) {
+    throw new Error(`上传图片失败: ${resp.data.msg}`);
+  }
+
+  return resp.data.data.file_token;
+}
+
+/**
+ * 保存内容到飞书多维表
+ * data: { title, content, source_url, tags, cover_url, detail_urls, news_title, news_source_url }
+ * cover_url / detail_urls 为相对路径如 /uploads/rendered/xxx.png
+ */
+async function saveContentToFeishuBitable(data) {
+  const bitableUrl = getConfig('feishu_bitable_url');
+  if (!bitableUrl) throw new Error('未配置飞书多维表 URL');
+
+  const parsed = parseBitableUrl(bitableUrl);
+  if (!parsed) throw new Error('飞书多维表 URL 格式错误，无法解析 app_token 和 table_id');
+
+  const { appToken, tableId } = parsed;
+  const token = await getTenantAccessToken();
+
+  // 上传封面图
+  const coverLocalPath = data.cover_url
+    ? path.join(__dirname, '../', data.cover_url)
+    : null;
+  const coverFileToken = coverLocalPath ? await uploadImageToBitable(coverLocalPath, appToken, token) : null;
+
+  // 上传详情图
+  const detailUrls = Array.isArray(data.detail_urls) ? data.detail_urls : [];
+  const detailFileTokens = [];
+  for (const dUrl of detailUrls) {
+    const dPath = path.join(__dirname, '../', dUrl);
+    const ft = await uploadImageToBitable(dPath, appToken, token);
+    if (ft) detailFileTokens.push({ file_token: ft });
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+
+  const fields = {
+    '资讯': data.news_title || data.title || '',
+    'url': data.news_source_url || data.source_url || '',
+    '标题': data.title || '',
+    '正文': data.content || '',
+    '创作时间': today,
+  };
+
+  if (data.tags) fields['Tags'] = data.tags;
+  if (coverFileToken) fields['封面'] = [{ file_token: coverFileToken }];
+  if (detailFileTokens.length > 0) fields['详情图'] = detailFileTokens;
+
+  const resp = await axios.post(
+    `${FEISHU_API}/bitable/v1/apps/${appToken}/tables/${tableId}/records`,
+    { fields },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  if (resp.data.code !== 0) {
+    throw new Error(`写入多维表失败: ${resp.data.msg}`);
+  }
+
+  return { record_id: resp.data.data?.record?.record_id, appToken, tableId };
+}
+
+module.exports = { saveNewsToFeishu, getOrCreateDailyDoc, saveContentToFeishuBitable };

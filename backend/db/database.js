@@ -50,10 +50,13 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS saved_contents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    news_id INTEGER,
     title TEXT,
     content TEXT,
     cover_url TEXT,
     detail_urls TEXT,
+    tags TEXT,
+    source_url TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -78,6 +81,10 @@ db.exec(`
 const migrations = [
   "ALTER TABLE news ADD COLUMN saved INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE news ADD COLUMN saved_at TEXT",
+  "ALTER TABLE news ADD COLUMN push_type TEXT",
+  "ALTER TABLE saved_contents ADD COLUMN news_id INTEGER",
+  "ALTER TABLE saved_contents ADD COLUMN tags TEXT",
+  "ALTER TABLE saved_contents ADD COLUMN source_url TEXT",
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (_) { /* 列已存在则忽略 */ }

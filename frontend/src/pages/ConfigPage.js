@@ -250,6 +250,35 @@ export default function ConfigPage() {
               </div>
             </div>
           </div>
+          <div className="config-section">
+            <h3 className="section-title">飞书多维表（内容审核）</h3>
+            <p className="section-desc">创作完成的内容可保存到此多维表，供人工审核。</p>
+            <div className="config-grid">
+              <div className="form-group full-width">
+                <label className="form-label">多维表 URL</label>
+                <input
+                  value={config.feishu_bitable_url || ''}
+                  onChange={(e) => handleChange('feishu_bitable_url', e.target.value)}
+                  placeholder="https://xxx.feishu.cn/base/UQxW...?table=tblQq...&view=vew..."
+                />
+                <p className="form-hint">从浏览器地址栏直接粘贴完整 URL，系统自动提取 app_token 和 table_id</p>
+              </div>
+            </div>
+          </div>
+          <div className="config-section">
+            <h3 className="section-title">飞书机器人通知</h3>
+            <p className="section-desc">Agent 完成内容创作后，通过飞书机器人 Webhook 通知你。</p>
+            <div className="config-grid">
+              <div className="form-group full-width">
+                <label className="form-label">Webhook 地址</label>
+                <input
+                  value={config.feishu_bot_webhook || ''}
+                  onChange={(e) => handleChange('feishu_bot_webhook', e.target.value)}
+                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                />
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
