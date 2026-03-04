@@ -117,7 +117,9 @@ Docker Compose 自动创建两个 named volume：
 
 ### 微信推送
 
-使用 [aibotk](https://api-bot.aibotk.com) 微信机器人 API。支持配置多个 wxid 和群聊，发送间隔随机 5-10 秒。
+~使用微信机器人 API。支持配置多个 wxid 和群聊，发送间隔随机 5-10 秒。~
+
+存在风控风险，不建议配置此版块，可留空。
 
 ### 关键词过滤
 
