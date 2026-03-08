@@ -29,3 +29,5 @@ frontend/build/
 # ── 日志 ────────────────────────────────────────
 *.log
 npm-debug.log*
+
+tests/**
