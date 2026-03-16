@@ -370,7 +370,7 @@
 }
 
 .content-modal-images {
-  background: #111;
+  background: var(--img-area-bg);
   position: relative;
   display: flex;
   align-items: center;

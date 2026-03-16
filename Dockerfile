@@ -15,6 +15,10 @@ RUN npm run build
 # ────────────────────────────────────────────
 FROM node:20-slim
 
+# 使用阿里云 Debian 镜像加速
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null; true
+
 # 安装 Chromium、中文字体和 fontconfig
 RUN apt-get update && apt-get install -y \
     chromium \
@@ -26,6 +30,9 @@ RUN apt-get update && apt-get install -y \
     libgif-dev \
     librsvg2-dev \
     curl \
+    python3 \
+    make \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Apple Color Emoji 字体到系统字体目录，让 Chromium 可以 local() 引用

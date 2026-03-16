@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import HomePage from './pages/HomePage';
@@ -10,6 +11,7 @@ import ResourcePage from './pages/ResourcePage';
 
 export default function App() {
   return (
+    <ThemeProvider>
     <ToastProvider>
       <BrowserRouter>
         <Routes>
@@ -49,5 +51,6 @@ export default function App() {
         </Routes>
       </BrowserRouter>
     </ToastProvider>
+    </ThemeProvider>
   );
 }

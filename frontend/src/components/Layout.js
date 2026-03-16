@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useTheme } from '../contexts/ThemeContext';
 import './Layout.css';
 
 const NAV_ITEMS = [
@@ -11,6 +12,7 @@ const NAV_ITEMS = [
 
 export default function Layout({ children }) {
   const location = useLocation();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <div className="layout">
@@ -32,6 +34,10 @@ export default function Layout({ children }) {
           ))}
         </nav>
         <div className="sidebar-footer">
+          <button className="theme-toggle" onClick={toggleTheme} title={theme === 'light' ? '切换到深色模式' : '切换到浅色模式'}>
+            <span className="theme-icon">{theme === 'light' ? '☾' : '☀'}</span>
+            <span>{theme === 'light' ? '深色模式' : '浅色模式'}</span>
+          </button>
           <span className="sidebar-version">v2.0</span>
         </div>
       </aside>

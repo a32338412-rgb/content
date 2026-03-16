@@ -133,7 +133,7 @@
 }
 
 .news-card:hover {
-  border-color: rgba(6, 255, 165, 0.3);
+  border-color: var(--accent);
 }
 
 .news-card.ai-newsed {

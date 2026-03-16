@@ -37,7 +37,7 @@
 }
 
 .sources-table tr:hover td {
-  background: rgba(255,255,255,0.02);
+  background: var(--hover-overlay);
 }
 
 .source-name-cell {
@@ -77,7 +77,7 @@
 
 /* 编辑行 */
 .source-row.editing td {
-  background: rgba(6, 255, 165, 0.04);
+  background: var(--accent-dim);
 }
 
 /* 添加表单 */

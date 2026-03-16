@@ -346,7 +346,7 @@
 
 /* 左侧图片区 - 2/3 比例 */
 .redbook-images {
-  background: #111;
+  background: var(--img-area-bg);
   position: relative;
   display: flex;
   align-items: center;
